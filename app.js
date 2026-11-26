@@ -561,11 +561,49 @@ ${bodyContent}
     saveTimer = setTimeout(saveContent, 1000);
   }
 
+  // Service Worker + Install prompt
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => {
-      navigator.serviceWorker.register("./sw.js").catch(() => {});
+      navigator.serviceWorker.register("./sw.js")
+        .then((reg) => console.log("SW registered", reg.scope))
+        .catch((err) => console.warn("SW failed", err));
     });
   }
+
+  // Capture the beforeinstallprompt event so we can show a custom Install button
+  let deferredInstallPrompt = null;
+  const btnInstall = document.getElementById("btn-install");
+
+  window.addEventListener("beforeinstallprompt", (e) => {
+    e.preventDefault();
+    deferredInstallPrompt = e;
+    if (btnInstall) btnInstall.style.display = "";
+    console.log("Install prompt ready");
+  });
+
+  if (btnInstall) {
+    btnInstall.addEventListener("click", async () => {
+      if (!deferredInstallPrompt) {
+        setStatus("Installation non disponible (déjà installé ou critères non remplis)");
+        return;
+      }
+      deferredInstallPrompt.prompt();
+      const { outcome } = await deferredInstallPrompt.userChoice;
+      if (outcome === "accepted") {
+        setStatus("Application installée");
+        btnInstall.style.display = "none";
+      } else {
+        setStatus("Installation annulée");
+      }
+      deferredInstallPrompt = null;
+    });
+  }
+
+  window.addEventListener("appinstalled", () => {
+    if (btnInstall) btnInstall.style.display = "none";
+    deferredInstallPrompt = null;
+    setStatus("Application installée avec succès");
+  });
 
   // ========== BOOT ==========
   const saved = loadContent();
@@ -590,5 +628,5 @@ ${bodyContent}
   window.addEventListener("resize", () => codeEditor && codeEditor.refresh());
   setTimeout(() => codeEditor && codeEditor.refresh(), 150);
 
-  console.log("Split WYSIWYG ready v4 – selection sync");
+  console.log("Split WYSIWYG ready v5 – PWA install");
 })();
