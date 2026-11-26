@@ -3,11 +3,11 @@
 
   // ---------- State ----------
   let codeEditor = null;
-  let isSyncingFromCode = false;
-  let isSyncingFromVisual = false;
   let liveEdit = true;
-  let layoutMode = "split"; // split | stacked | source-only | visual-only
-  let visualSyncTimer = null;
+  let layoutMode = "split";
+  let lastVisualHtml = "";
+  let lastCodeHtml = "";
+  let syncLock = false; // simple global lock
 
   const visualEl = document.getElementById("visual-editor");
   const statusEl = document.getElementById("status");
@@ -16,7 +16,6 @@
   const resizer = document.getElementById("resizer");
   const liveEditCheckbox = document.getElementById("live-edit");
 
-  // ---------- Default content ----------
   const DEFAULT_HTML = `<h1>Bienvenue dans Split WYSIWYG</h1>
 <p>Éditeur <strong>What You See Is What You Get</strong> à vue partagée.</p>
 <p>Modifie le contenu ici à droite → le code source se met à jour automatiquement à gauche.</p>
@@ -30,13 +29,12 @@
 <hr>
 <p>Commence à écrire !</p>`;
 
-  // ---------- Helpers ----------
   function setStatus(msg) {
     statusEl.textContent = msg;
     clearTimeout(setStatus._t);
     setStatus._t = setTimeout(() => {
       statusEl.textContent = "Prêt";
-    }, 2500);
+    }, 2200);
   }
 
   function updateStats() {
@@ -45,88 +43,67 @@
     wordCountEl.textContent = `${words} mot${words > 1 ? "s" : ""}`;
   }
 
-  // ---------- Visual → Code (robust + debounced) ----------
-  function syncVisualToCode(immediate = false) {
-    if (isSyncingFromCode || !codeEditor || !liveEdit) return;
+  function normalize(str) {
+    return (str || "").replace(/\s+/g, " ").replace(/>\s+</g, "><").trim();
+  }
 
-    const doSync = () => {
-      if (isSyncingFromCode || !codeEditor) return;
+  // ---------- Visual → Code ----------
+  function updateCodeFromVisual() {
+    if (!codeEditor || !liveEdit || syncLock) return;
 
-      isSyncingFromVisual = true;
+    const html = visualEl.innerHTML;
+    if (normalize(html) === normalize(lastCodeHtml)) return;
+
+    syncLock = true;
+    try {
+      lastCodeHtml = html;
+      lastVisualHtml = html;
+
+      const scrollInfo = codeEditor.getScrollInfo();
+      const cursor = codeEditor.getCursor();
+
+      codeEditor.setValue(html);
+
       try {
-        // Get a clean version of the current visual HTML
-        let html = visualEl.innerHTML;
+        codeEditor.setCursor(cursor);
+        codeEditor.scrollTo(scrollInfo.left, scrollInfo.top);
+      } catch (_) {}
 
-        // Avoid useless updates when content is identical (ignore pure whitespace diffs)
-        const current = codeEditor.getValue();
-        if (normalizeHtml(current) === normalizeHtml(html)) {
-          updateStats();
-          return;
-        }
-
-        // Preserve scroll position of the code editor
-        const scrollInfo = codeEditor.getScrollInfo();
-        const cursor = codeEditor.getCursor();
-
-        codeEditor.setValue(html);
-
-        // Restore approximate cursor / scroll
-        try {
-          codeEditor.setCursor(cursor);
-          codeEditor.scrollTo(scrollInfo.left, scrollInfo.top);
-        } catch (_) {}
-
-        updateStats();
-        setStatus("Aperçu → Code synchronisé");
-      } finally {
-        // Small delay so CodeMirror's own "change" event is ignored
-        setTimeout(() => {
-          isSyncingFromVisual = false;
-        }, 50);
-      }
-    };
-
-    if (immediate) {
-      clearTimeout(visualSyncTimer);
-      doSync();
-    } else {
-      clearTimeout(visualSyncTimer);
-      visualSyncTimer = setTimeout(doSync, 120); // debounce
+      updateStats();
+      setStatus("Aperçu → Code");
+    } finally {
+      // Release lock after CodeMirror has processed the change event
+      setTimeout(() => {
+        syncLock = false;
+      }, 80);
     }
   }
 
-  // Light normalization to compare content meaningfully
-  function normalizeHtml(str) {
-    return (str || "")
-      .replace(/\s+/g, " ")
-      .replace(/>\s+</g, "><")
-      .trim();
-  }
-
   // ---------- Code → Visual ----------
-  function syncCodeToVisual() {
-    if (isSyncingFromVisual || !liveEdit || !codeEditor) return;
+  function updateVisualFromCode() {
+    if (!codeEditor || !liveEdit || syncLock) return;
 
-    isSyncingFromCode = true;
+    const html = codeEditor.getValue();
+    if (normalize(html) === normalize(lastVisualHtml)) return;
+
+    syncLock = true;
     try {
-      const html = codeEditor.getValue();
-      // Only update if different to avoid resetting caret in visual when possible
-      if (normalizeHtml(visualEl.innerHTML) !== normalizeHtml(html)) {
-        visualEl.innerHTML = html;
-      }
+      lastVisualHtml = html;
+      lastCodeHtml = html;
+      visualEl.innerHTML = html;
       updateStats();
-      setStatus("Code → Aperçu synchronisé");
+      setStatus("Code → Aperçu");
     } finally {
       setTimeout(() => {
-        isSyncingFromCode = false;
-      }, 50);
+        syncLock = false;
+      }, 80);
     }
   }
 
   // ---------- Init CodeMirror ----------
-  function initCodeEditor() {
+  function initCodeEditor(initialValue) {
     codeEditor = CodeMirror(document.getElementById("code-editor"), {
-      value: DEFAULT_HTML,
+      value: initialValue || "",
       mode: "htmlmixed",
       theme: "material-darker",
       lineNumbers: true,
@@ -142,41 +119,49 @@
     });
 
     codeEditor.on("change", () => {
-      if (isSyncingFromVisual) return;
-      syncCodeToVisual();
+      if (syncLock) return;
+      updateVisualFromCode();
     });
   }
 
-  // ---------- Listen to visual changes (multiple strategies for reliability) ----------
-  // 1. Classic input / keyup / paste
-  visualEl.addEventListener("input", () => syncVisualToCode());
-  visualEl.addEventListener("keyup", () => syncVisualToCode());
-  visualEl.addEventListener("paste", () => {
-    setTimeout(() => syncVisualToCode(true), 20);
-  });
+  // ---------- Attach visual listeners (AFTER CodeMirror is ready) ----------
+  function attachVisualListeners() {
+    // Debounced version for typing
+    let debounceTimer = null;
+    const debouncedUpdate = () => {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(updateCodeFromVisual, 100);
+    };
 
-  // 2. MutationObserver – catches almost everything (formatting, drag-drop, etc.)
-  const observer = new MutationObserver(() => {
-    if (isSyncingFromCode) return;
-    syncVisualToCode();
-  });
-  observer.observe(visualEl, {
-    childList: true,
-    subtree: true,
-    characterData: true,
-    attributes: true,
-  });
+    visualEl.addEventListener("input", debouncedUpdate);
+    visualEl.addEventListener("keyup", debouncedUpdate);
+    visualEl.addEventListener("paste", () => {
+      setTimeout(updateCodeFromVisual, 30);
+    });
 
-  // ---------- Toolbar commands ----------
+    // MutationObserver for toolbar, drag, etc.
+    const observer = new MutationObserver(() => {
+      if (syncLock) return;
+      debouncedUpdate();
+    });
+    observer.observe(visualEl, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      attributes: false,
+    });
+  }
+
+  // ---------- Toolbar ----------
   function exec(cmd, value = null) {
     visualEl.focus();
     try {
       document.execCommand(cmd, false, value);
     } catch (e) {
-      console.warn("execCommand failed:", cmd, e);
+      console.warn("execCommand:", cmd, e);
     }
-    // Force immediate sync after toolbar action
-    setTimeout(() => syncVisualToCode(true), 10);
+    // Immediate sync after formatting
+    setTimeout(updateCodeFromVisual, 20);
   }
 
   document.querySelectorAll(".tool-btn[data-cmd]").forEach((btn) => {
@@ -203,10 +188,8 @@
     });
   });
 
-  // Keyboard shortcuts
   document.addEventListener("keydown", (e) => {
     if (!(e.ctrlKey || e.metaKey)) return;
-    // Only intercept when focus is in the visual editor
     if (document.activeElement !== visualEl && !visualEl.contains(document.activeElement)) {
       return;
     }
@@ -238,9 +221,7 @@
   resizer.addEventListener("mousedown", (e) => {
     isDragging = true;
     resizer.classList.add("dragging");
-    document.body.style.cursor = container.classList.contains("stacked")
-      ? "row-resize"
-      : "col-resize";
+    document.body.style.cursor = container.classList.contains("stacked") ? "row-resize" : "col-resize";
     document.body.style.userSelect = "none";
     e.preventDefault();
   });
@@ -281,18 +262,15 @@
     if (layoutMode === "source-only") container.classList.add("source-only");
     if (layoutMode === "visual-only") container.classList.add("visual-only");
 
-    // Reset flex
     document.querySelector(".source-panel").style.flex = "";
     document.querySelector(".visual-panel").style.flex = "";
 
-    setStatus(
-      {
-        split: "Vue partagée (côte à côte)",
-        stacked: "Vue empilée",
-        "source-only": "Code uniquement",
-        "visual-only": "Aperçu uniquement",
-      }[layoutMode]
-    );
+    setStatus({
+      split: "Vue partagée (côte à côte)",
+      stacked: "Vue empilée",
+      "source-only": "Code uniquement",
+      "visual-only": "Aperçu uniquement",
+    }[layoutMode]);
 
     setTimeout(() => codeEditor && codeEditor.refresh(), 50);
   });
@@ -300,14 +278,12 @@
   // ---------- Clear ----------
   document.getElementById("btn-clear").addEventListener("click", () => {
     if (!confirm("Effacer tout le contenu ?")) return;
-    isSyncingFromVisual = true;
-    isSyncingFromCode = true;
+    syncLock = true;
     visualEl.innerHTML = "";
     codeEditor.setValue("");
-    setTimeout(() => {
-      isSyncingFromVisual = false;
-      isSyncingFromCode = false;
-    }, 50);
+    lastVisualHtml = "";
+    lastCodeHtml = "";
+    setTimeout(() => { syncLock = false; }, 80);
     updateStats();
     setStatus("Contenu effacé");
   });
@@ -340,7 +316,7 @@ ${codeEditor.getValue()}
     setStatus("Fichier HTML téléchargé");
   });
 
-  // ---------- Format code (basic pretty) ----------
+  // ---------- Format ----------
   document.getElementById("btn-format").addEventListener("click", () => {
     try {
       let html = codeEditor.getValue();
@@ -349,20 +325,21 @@ ${codeEditor.getValue()}
         .replace(/(<\/?(?:div|p|h[1-6]|ul|ol|li|blockquote|table|tr|thead|tbody|section|article|header|footer|nav)[^>]*>)/gi, "\n$1\n")
         .replace(/\n{3,}/g, "\n\n")
         .trim();
-      isSyncingFromVisual = true;
+      syncLock = true;
       codeEditor.setValue(html);
-      setTimeout(() => { isSyncingFromVisual = false; }, 50);
+      lastCodeHtml = html;
+      setTimeout(() => { syncLock = false; }, 80);
       setStatus("Code formaté");
     } catch (err) {
       setStatus("Erreur de formatage");
     }
   });
 
-  // ---------- Copy code ----------
+  // ---------- Copy ----------
   document.getElementById("btn-copy-code").addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(codeEditor.getValue());
-      setStatus("Code copié dans le presse-papiers");
+      setStatus("Code copié");
     } catch {
       setStatus("Impossible de copier");
     }
@@ -386,7 +363,7 @@ ${codeEditor.getValue()}
     }
   });
 
-  // ---------- Persist content (localStorage) ----------
+  // ---------- Persist ----------
   function saveContent() {
     try {
       if (codeEditor) {
@@ -397,54 +374,56 @@ ${codeEditor.getValue()}
 
   function loadContent() {
     try {
-      const saved = localStorage.getItem("split-wysiwyg-content");
-      if (saved) {
-        codeEditor.setValue(saved);
-        visualEl.innerHTML = saved;
-        return true;
-      }
-    } catch (_) {}
-    return false;
+      return localStorage.getItem("split-wysiwyg-content");
+    } catch (_) {
+      return null;
+    }
   }
 
   let saveTimer = null;
   function scheduleSave() {
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(saveContent, 1500);
+    saveTimer = setTimeout(saveContent, 1200);
   }
 
-  // ---------- Service Worker (PWA) ----------
+  // ---------- Service Worker ----------
   if ("serviceWorker" in navigator) {
     window.addEventListener("load", () => {
       navigator.serviceWorker
         .register("./sw.js")
         .then((reg) => console.log("SW registered", reg.scope))
-        .catch((err) => console.warn("SW registration failed", err));
+        .catch((err) => console.warn("SW failed", err));
     });
   }
 
-  // ---------- Boot ----------
-  initCodeEditor();
+  // ---------- BOOT (order is important) ----------
+  const saved = loadContent();
+  const initial = saved || DEFAULT_HTML;
 
-  if (!loadContent()) {
-    visualEl.innerHTML = DEFAULT_HTML;
-  }
+  // 1. Init CodeMirror with content
+  initCodeEditor(initial);
+
+  // 2. Set visual content
+  visualEl.innerHTML = initial;
+  lastVisualHtml = initial;
+  lastCodeHtml = initial;
+
+  // 3. NOW attach the listeners (after everything is ready)
+  attachVisualListeners();
 
   updateStats();
 
-  // Hook save on changes
+  // Save hooks
   codeEditor.on("change", scheduleSave);
   visualEl.addEventListener("input", scheduleSave);
 
-  // Refresh CM on window resize
   window.addEventListener("resize", () => {
     codeEditor && codeEditor.refresh();
   });
 
-  // Initial refresh after layout
   setTimeout(() => {
     if (codeEditor) codeEditor.refresh();
-  }, 100);
+  }, 120);
 
-  console.log("Split WYSIWYG Editor ready – sync improved");
+  console.log("Split WYSIWYG ready – robust sync");
 })();
