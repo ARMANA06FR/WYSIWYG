@@ -125,6 +125,106 @@
     });
   }
 
+  // ---------- Bidirectional selection sync ----------
+  let selectionSyncLock = false;
+
+  function selectInCodeMirror(text) {
+    if (!codeEditor || !text || text.length < 2) return false;
+    const content = codeEditor.getValue();
+    const idx = content.indexOf(text);
+    if (idx === -1) return false;
+
+    const from = codeEditor.posFromIndex(idx);
+    const to = codeEditor.posFromIndex(idx + text.length);
+    codeEditor.setSelection(from, to);
+    codeEditor.scrollIntoView({ from, to }, 80);
+    return true;
+  }
+
+  function selectInVisual(text) {
+    if (!text || text.length < 2) return false;
+
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+
+    const walker = document.createTreeWalker(visualEl, NodeFilter.SHOW_TEXT, null);
+    let node;
+    while ((node = walker.nextNode())) {
+      const idx = node.textContent.indexOf(text);
+      if (idx !== -1) {
+        const range = document.createRange();
+        range.setStart(node, idx);
+        range.setEnd(node, idx + text.length);
+        selection.addRange(range);
+
+        // Scroll the node into view
+        if (node.parentElement) {
+          node.parentElement.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function getSelectedTextFromVisual() {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return "";
+    // Only consider selection inside the visual editor
+    if (!visualEl.contains(sel.anchorNode)) return "";
+    return sel.toString().trim();
+  }
+
+  function syncSelectionFromVisual() {
+    if (selectionSyncLock || shouldIgnore()) return;
+    const text = getSelectedTextFromVisual();
+    if (!text || text.length < 2) return;
+
+    selectionSyncLock = true;
+    try {
+      selectInCodeMirror(text);
+    } finally {
+      setTimeout(() => { selectionSyncLock = false; }, 50);
+    }
+  }
+
+  function syncSelectionFromCode() {
+    if (selectionSyncLock || shouldIgnore()) return;
+    const text = codeEditor.getSelection().trim();
+    if (!text || text.length < 2) return;
+
+    selectionSyncLock = true;
+    try {
+      selectInVisual(text);
+    } finally {
+      setTimeout(() => { selectionSyncLock = false; }, 50);
+    }
+  }
+
+  function attachSelectionSync() {
+    // Visual → Code (mouseup + selectionchange)
+    visualEl.addEventListener("mouseup", () => {
+      setTimeout(syncSelectionFromVisual, 10);
+    });
+
+    document.addEventListener("selectionchange", () => {
+      if (document.activeElement === visualEl || visualEl.contains(document.activeElement)) {
+        // small debounce
+        clearTimeout(attachSelectionSync._selTimer);
+        attachSelectionSync._selTimer = setTimeout(syncSelectionFromVisual, 30);
+      }
+    });
+
+    // Code → Visual
+    codeEditor.on("cursorActivity", () => {
+      if (selectionSyncLock) return;
+      // Only when there is an actual selection (not just cursor)
+      if (codeEditor.getSelection().length >= 2) {
+        setTimeout(syncSelectionFromCode, 10);
+      }
+    });
+  }
+
   // ---------- Toolbar ----------
   function exec(cmd, value = null) {
     visualEl.focus();
@@ -379,6 +479,7 @@ ${codeEditor.getValue()}
 
   // 3. Attach listeners
   attachVisualListeners();
+  attachSelectionSync();
 
   updateStats();
 
@@ -388,5 +489,5 @@ ${codeEditor.getValue()}
   window.addEventListener("resize", () => codeEditor && codeEditor.refresh());
   setTimeout(() => codeEditor && codeEditor.refresh(), 150);
 
-  console.log("Split WYSIWYG ready v3");
+  console.log("Split WYSIWYG ready v4 – selection sync");
 })();
