@@ -236,6 +236,22 @@ html, body {
   border-right: 1px solid var(--border) !important;
 }
 
+/* Stronger selection highlight in code editor */
+.CodeMirror-selected {
+  background: rgba(56, 189, 248, 0.45) !important;
+}
+.CodeMirror-selectedtext {
+  background: rgba(56, 189, 248, 0.45) !important;
+  color: #ffffff !important;
+}
+.CodeMirror-focused .CodeMirror-selected {
+  background: rgba(56, 189, 248, 0.55) !important;
+}
+/* Also make the cursor more visible */
+.CodeMirror-cursor {
+  border-left: 2px solid #38bdf8 !important;
+}
+
 /* Visual editor */
 #visual-editor {
   flex: 1;
@@ -252,6 +268,16 @@ html, body {
 
 #visual-editor:focus {
   box-shadow: inset 0 0 0 2px rgba(56, 189, 248, 0.35);
+}
+
+/* Stronger selection in the visual editor */
+#visual-editor ::selection {
+  background: rgba(56, 189, 248, 0.45);
+  color: #0f172a;
+}
+#visual-editor::-moz-selection {
+  background: rgba(56, 189, 248, 0.45);
+  color: #0f172a;
 }
 
 /* Default styles inside the visual editor so it looks nice */
