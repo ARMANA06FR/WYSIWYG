@@ -233,6 +233,50 @@
     setStatus("Contenu effacé");
   });
 
+  // Import HTML file
+  const fileInput = document.getElementById("file-import");
+  document.getElementById("btn-import").addEventListener("click", () => {
+    fileInput.value = "";
+    fileInput.click();
+  });
+
+  fileInput.addEventListener("change", (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        let content = reader.result || "";
+
+        // If it's a full HTML document, try to extract the body content
+        const bodyMatch = content.match(/<body[^>]*>([\s\S]*)<\/body>/i);
+        if (bodyMatch) {
+          content = bodyMatch[1].trim();
+        } else {
+          // Remove doctype / html / head if present
+          content = content
+            .replace(/<!DOCTYPE[^>]*>/i, "")
+            .replace(/<\/?html[^>]*>/gi, "")
+            .replace(/<head[\s\S]*?<\/head>/i, "")
+            .trim();
+        }
+
+        ignoreFor(200);
+        codeEditor.setValue(content);
+        visualEl.innerHTML = content;
+        updateStats();
+        setStatus("Fichier importé : " + file.name);
+        scheduleSave();
+      } catch (err) {
+        console.error(err);
+        setStatus("Erreur lors de l'import");
+      }
+    };
+    reader.onerror = () => setStatus("Impossible de lire le fichier");
+    reader.readAsText(file, "UTF-8");
+  });
+
   // Download
   document.getElementById("btn-download").addEventListener("click", () => {
     const html = `<!DOCTYPE html>
