@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f172a" />
+  <meta name="description" content="Éditeur WYSIWYG à vue partagée - Visual + Code source en temps réel" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" type="image/svg+xml" href="icon.svg" />
+  <link rel="apple-touch-icon" href="icon-192.png" />
+  <title>Split WYSIWYG Editor</title>
+  <link rel="stylesheet" href="styles.css" />
+  <!-- CodeMirror for the source editor -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/material-darker.min.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/hint/show-hint.min.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="toolbar">
+      <div class="brand">
+        <span class="logo">⟨/⟩</span>
+        <h1>Split WYSIWYG</h1>
+      </div>
+
+      <div class="toolbar-group">
+        <button id="btn-bold" class="tool-btn" title="Gras (Ctrl+B)" data-cmd="bold"><b>B</b></button>
+        <button id="btn-italic" class="tool-btn" title="Italique (Ctrl+I)" data-cmd="italic"><i>I</i></button>
+        <button id="btn-underline" class="tool-btn" title="Souligné" data-cmd="underline"><u>U</u></button>
+        <button id="btn-strike" class="tool-btn" title="Barré" data-cmd="strikeThrough"><s>S</s></button>
+        <span class="sep"></span>
+        <button id="btn-h1" class="tool-btn" title="Titre 1" data-cmd="formatBlock" data-value="h1">H1</button>
+        <button id="btn-h2" class="tool-btn" title="Titre 2" data-cmd="formatBlock" data-value="h2">H2</button>
+        <button id="btn-p" class="tool-btn" title="Paragraphe" data-cmd="formatBlock" data-value="p">P</button>
+        <span class="sep"></span>
+        <button id="btn-ul" class="tool-btn" title="Liste à puces" data-cmd="insertUnorderedList">• List</button>
+        <button id="btn-ol" class="tool-btn" title="Liste numérotée" data-cmd="insertOrderedList">1. List</button>
+        <button id="btn-quote" class="tool-btn" title="Citation" data-cmd="formatBlock" data-value="blockquote">❝</button>
+        <span class="sep"></span>
+        <button id="btn-link" class="tool-btn" title="Lien" data-cmd="createLink">🔗</button>
+        <button id="btn-image" class="tool-btn" title="Image" data-cmd="insertImage">🖼</button>
+        <button id="btn-hr" class="tool-btn" title="Ligne horizontale" data-cmd="insertHorizontalRule">―</button>
+        <span class="sep"></span>
+        <button id="btn-undo" class="tool-btn" title="Annuler" data-cmd="undo">↺</button>
+        <button id="btn-redo" class="tool-btn" title="Rétablir" data-cmd="redo">↻</button>
+      </div>
+
+      <div class="toolbar-right">
+        <button id="btn-toggle-view" class="tool-btn secondary" title="Basculer la disposition">⇄</button>
+        <button id="btn-clear" class="tool-btn secondary" title="Tout effacer">🗑</button>
+        <button id="btn-download" class="tool-btn secondary" title="Télécharger HTML">⬇</button>
+        <button id="btn-fullscreen" class="tool-btn secondary" title="Plein écran">⛶</button>
+      </div>
+    </header>
+
+    <main class="editor-container" id="editor-container">
+      <!-- Source panel -->
+      <section class="panel source-panel" id="source-panel">
+        <div class="panel-header">
+          <span>Code source (HTML)</span>
+          <div class="panel-actions">
+            <button id="btn-format" class="mini-btn" title="Formater le code">Format</button>
+            <button id="btn-copy-code" class="mini-btn" title="Copier">Copier</button>
+          </div>
+        </div>
+        <div id="code-editor"></div>
+      </section>
+
+      <!-- Resizer -->
+      <div class="resizer" id="resizer" title="Glisser pour redimensionner"></div>
+
+      <!-- Visual panel -->
+      <section class="panel visual-panel" id="visual-panel">
+        <div class="panel-header">
+          <span>Aperçu WYSIWYG</span>
+          <div class="panel-actions">
+            <label class="toggle">
+              <input type="checkbox" id="live-edit" checked />
+              <span>Édition live</span>
+            </label>
+          </div>
+        </div>
+        <div id="visual-editor" contenteditable="true" spellcheck="true"></div>
+      </section>
+    </main>
+
+    <footer class="status-bar">
+      <span id="status">Prêt</span>
+      <span id="word-count">0 mots</span>
+    </footer>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/xml/xml.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/javascript/javascript.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/css/css.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/htmlmixed/htmlmixed.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/closetag.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/matchtags.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/hint/show-hint.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/hint/html-hint.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/hint/xml-hint.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
