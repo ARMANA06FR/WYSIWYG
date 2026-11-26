@@ -6,6 +6,24 @@
   let layoutMode = "split";
   let ignoreUntil = 0; // timestamp until which we ignore syncs
 
+  // Stores the parts of a full HTML document so we can re-export a complete file
+  let documentShell = {
+    isFullDocument: false,
+    doctype: "<!DOCTYPE html>",
+    htmlOpen: '<html lang="fr">',
+    head: `  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Document exporté</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; line-height: 1.6; color: #1e293b; }
+    img { max-width: 100%; height: auto; }
+    blockquote { border-left: 4px solid #38bdf8; padding-left: 1rem; color: #64748b; }
+  </style>`,
+    bodyOpen: "<body>",
+    bodyClose: "</body>",
+    htmlClose: "</html>"
+  };
+
   const visualEl = document.getElementById("visual-editor");
   const statusEl = document.getElementById("status");
   const wordCountEl = document.getElementById("word-count");
@@ -329,9 +347,96 @@
     ignoreFor(200);
     visualEl.innerHTML = "";
     codeEditor.setValue("");
+    // Reset to default (non-imported) shell
+    documentShell.isFullDocument = false;
     updateStats();
     setStatus("Contenu effacé");
   });
+
+  // Parse a full HTML document into shell + body content
+  function parseFullHtml(raw) {
+    const result = {
+      isFullDocument: false,
+      doctype: "<!DOCTYPE html>",
+      htmlOpen: '<html lang="fr">',
+      head: "",
+      bodyOpen: "<body>",
+      bodyContent: raw,
+      bodyClose: "</body>",
+      htmlClose: "</html>"
+    };
+
+    // Doctype
+    const doctypeMatch = raw.match(/<!DOCTYPE[^>]*>/i);
+    if (doctypeMatch) {
+      result.doctype = doctypeMatch[0];
+      result.isFullDocument = true;
+    }
+
+    // <html ...>
+    const htmlOpenMatch = raw.match(/<html([^>]*)>/i);
+    if (htmlOpenMatch) {
+      result.htmlOpen = htmlOpenMatch[0];
+      result.isFullDocument = true;
+    }
+
+    // <head>...</head>
+    const headMatch = raw.match(/<head[^>]*>([\s\S]*?)<\/head>/i);
+    if (headMatch) {
+      result.head = headMatch[1].trim();
+      result.isFullDocument = true;
+    }
+
+    // <body ...>...</body>
+    const bodyMatch = raw.match(/<body([^>]*)>([\s\S]*)<\/body>/i);
+    if (bodyMatch) {
+      result.bodyOpen = "<body" + bodyMatch[1] + ">";
+      result.bodyContent = bodyMatch[2].trim();
+      result.bodyClose = "</body>";
+      result.isFullDocument = true;
+    } else if (result.isFullDocument) {
+      // Full-ish document but no body tag: strip known wrappers
+      result.bodyContent = raw
+        .replace(/<!DOCTYPE[^>]*>/i, "")
+        .replace(/<\/?html[^>]*>/gi, "")
+        .replace(/<head[\s\S]*?<\/head>/i, "")
+        .trim();
+    }
+
+    // </html>
+    if (/<\/html>/i.test(raw)) {
+      result.htmlClose = "</html>";
+    }
+
+    return result;
+  }
+
+  function buildFullHtml(bodyContent) {
+    const s = documentShell;
+    if (!s.isFullDocument) {
+      // Default template when no full document was imported
+      return `<!DOCTYPE html>
+<html lang="fr">
+<head>
+${s.head}
+</head>
+<body>
+${bodyContent}
+</body>
+</html>`;
+    }
+
+    // Reconstruct original structure
+    let out = "";
+    if (s.doctype) out += s.doctype + "\n";
+    out += s.htmlOpen + "\n";
+    out += "<head>\n" + s.head + "\n</head>\n";
+    out += s.bodyOpen + "\n";
+    out += bodyContent + "\n";
+    out += s.bodyClose + "\n";
+    out += s.htmlClose + "\n";
+    return out;
+  }
 
   // Import HTML file
   const fileInput = document.getElementById("file-import");
@@ -347,26 +452,31 @@
     const reader = new FileReader();
     reader.onload = () => {
       try {
-        let content = reader.result || "";
+        const raw = reader.result || "";
+        const parsed = parseFullHtml(raw);
 
-        // If it's a full HTML document, try to extract the body content
-        const bodyMatch = content.match(/<body[^>]*>([\s\S]*)<\/body>/i);
-        if (bodyMatch) {
-          content = bodyMatch[1].trim();
-        } else {
-          // Remove doctype / html / head if present
-          content = content
-            .replace(/<!DOCTYPE[^>]*>/i, "")
-            .replace(/<\/?html[^>]*>/gi, "")
-            .replace(/<head[\s\S]*?<\/head>/i, "")
-            .trim();
-        }
+        // Remember the shell so download can rebuild a complete document
+        documentShell = {
+          isFullDocument: parsed.isFullDocument,
+          doctype: parsed.doctype,
+          htmlOpen: parsed.htmlOpen,
+          head: parsed.head || documentShell.head,
+          bodyOpen: parsed.bodyOpen,
+          bodyClose: parsed.bodyClose,
+          htmlClose: parsed.htmlClose
+        };
+
+        const bodyContent = parsed.bodyContent;
 
         ignoreFor(200);
-        codeEditor.setValue(content);
-        visualEl.innerHTML = content;
+        codeEditor.setValue(bodyContent);
+        visualEl.innerHTML = bodyContent;
         updateStats();
-        setStatus("Fichier importé : " + file.name);
+        setStatus(
+          parsed.isFullDocument
+            ? "Document complet importé : " + file.name
+            : "Fragment HTML importé : " + file.name
+        );
         scheduleSave();
       } catch (err) {
         console.error(err);
@@ -377,30 +487,21 @@
     reader.readAsText(file, "UTF-8");
   });
 
-  // Download
+  // Download – rebuilds a full usable HTML file
   document.getElementById("btn-download").addEventListener("click", () => {
-    const html = `<!DOCTYPE html>
-<html lang="fr">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Document exporté</title>
-  <style>
-    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; line-height: 1.6; color: #1e293b; }
-    img { max-width: 100%; height: auto; }
-    blockquote { border-left: 4px solid #38bdf8; padding-left: 1rem; color: #64748b; }
-  </style>
-</head>
-<body>
-${codeEditor.getValue()}
-</body>
-</html>`;
-    const blob = new Blob([html], { type: "text/html" });
+    const bodyContent = codeEditor.getValue();
+    const html = buildFullHtml(bodyContent);
+    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = "document.html";
     a.click();
-    setStatus("Fichier HTML téléchargé");
+    URL.revokeObjectURL(a.href);
+    setStatus(
+      documentShell.isFullDocument
+        ? "Document HTML complet téléchargé"
+        : "Fichier HTML téléchargé"
+    );
   });
 
   // Format
