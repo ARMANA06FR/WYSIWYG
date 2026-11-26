@@ -7,6 +7,7 @@
   let isSyncingFromVisual = false;
   let liveEdit = true;
   let layoutMode = "split"; // split | stacked | source-only | visual-only
+  let visualSyncTimer = null;
 
   const visualEl = document.getElementById("visual-editor");
   const statusEl = document.getElementById("status");
@@ -29,6 +30,99 @@
 <hr>
 <p>Commence à écrire !</p>`;
 
+  // ---------- Helpers ----------
+  function setStatus(msg) {
+    statusEl.textContent = msg;
+    clearTimeout(setStatus._t);
+    setStatus._t = setTimeout(() => {
+      statusEl.textContent = "Prêt";
+    }, 2500);
+  }
+
+  function updateStats() {
+    const text = visualEl.innerText || "";
+    const words = text.trim() ? text.trim().split(/\s+/).length : 0;
+    wordCountEl.textContent = `${words} mot${words > 1 ? "s" : ""}`;
+  }
+
+  // ---------- Visual → Code (robust + debounced) ----------
+  function syncVisualToCode(immediate = false) {
+    if (isSyncingFromCode || !codeEditor || !liveEdit) return;
+
+    const doSync = () => {
+      if (isSyncingFromCode || !codeEditor) return;
+
+      isSyncingFromVisual = true;
+      try {
+        // Get a clean version of the current visual HTML
+        let html = visualEl.innerHTML;
+
+        // Avoid useless updates when content is identical (ignore pure whitespace diffs)
+        const current = codeEditor.getValue();
+        if (normalizeHtml(current) === normalizeHtml(html)) {
+          updateStats();
+          return;
+        }
+
+        // Preserve scroll position of the code editor
+        const scrollInfo = codeEditor.getScrollInfo();
+        const cursor = codeEditor.getCursor();
+
+        codeEditor.setValue(html);
+
+        // Restore approximate cursor / scroll
+        try {
+          codeEditor.setCursor(cursor);
+          codeEditor.scrollTo(scrollInfo.left, scrollInfo.top);
+        } catch (_) {}
+
+        updateStats();
+        setStatus("Aperçu → Code synchronisé");
+      } finally {
+        // Small delay so CodeMirror's own "change" event is ignored
+        setTimeout(() => {
+          isSyncingFromVisual = false;
+        }, 50);
+      }
+    };
+
+    if (immediate) {
+      clearTimeout(visualSyncTimer);
+      doSync();
+    } else {
+      clearTimeout(visualSyncTimer);
+      visualSyncTimer = setTimeout(doSync, 120); // debounce
+    }
+  }
+
+  // Light normalization to compare content meaningfully
+  function normalizeHtml(str) {
+    return (str || "")
+      .replace(/\s+/g, " ")
+      .replace(/>\s+</g, "><")
+      .trim();
+  }
+
+  // ---------- Code → Visual ----------
+  function syncCodeToVisual() {
+    if (isSyncingFromVisual || !liveEdit || !codeEditor) return;
+
+    isSyncingFromCode = true;
+    try {
+      const html = codeEditor.getValue();
+      // Only update if different to avoid resetting caret in visual when possible
+      if (normalizeHtml(visualEl.innerHTML) !== normalizeHtml(html)) {
+        visualEl.innerHTML = html;
+      }
+      updateStats();
+      setStatus("Code → Aperçu synchronisé");
+    } finally {
+      setTimeout(() => {
+        isSyncingFromCode = false;
+      }, 50);
+    }
+  }
+
   // ---------- Init CodeMirror ----------
   function initCodeEditor() {
     codeEditor = CodeMirror(document.getElementById("code-editor"), {
@@ -49,55 +143,40 @@
 
     codeEditor.on("change", () => {
       if (isSyncingFromVisual) return;
-      if (!liveEdit) return;
-      isSyncingFromCode = true;
-      try {
-        const html = codeEditor.getValue();
-        visualEl.innerHTML = html;
-        updateStats();
-        setStatus("Code → Aperçu synchronisé");
-      } finally {
-        // Small delay to avoid feedback loops with input events
-        setTimeout(() => {
-          isSyncingFromCode = false;
-        }, 30);
-      }
+      syncCodeToVisual();
     });
   }
 
-  // ---------- Visual editor events ----------
-  function onVisualInput() {
-    if (isSyncingFromCode) return;
-    isSyncingFromVisual = true;
-    try {
-      const html = visualEl.innerHTML;
-      // Preserve cursor roughly by only updating if content differs
-      if (codeEditor.getValue() !== html) {
-        const cursor = codeEditor.getCursor();
-        codeEditor.setValue(html);
-        // Try to restore approximate position
-        try {
-          codeEditor.setCursor(cursor);
-        } catch (_) {}
-      }
-      updateStats();
-      setStatus("Aperçu → Code synchronisé");
-    } finally {
-      setTimeout(() => {
-        isSyncingFromVisual = false;
-      }, 30);
-    }
-  }
+  // ---------- Listen to visual changes (multiple strategies for reliability) ----------
+  // 1. Classic input / keyup / paste
+  visualEl.addEventListener("input", () => syncVisualToCode());
+  visualEl.addEventListener("keyup", () => syncVisualToCode());
+  visualEl.addEventListener("paste", () => {
+    setTimeout(() => syncVisualToCode(true), 20);
+  });
 
-  visualEl.addEventListener("input", onVisualInput);
-  visualEl.addEventListener("keyup", onVisualInput);
-  visualEl.addEventListener("paste", () => setTimeout(onVisualInput, 10));
+  // 2. MutationObserver – catches almost everything (formatting, drag-drop, etc.)
+  const observer = new MutationObserver(() => {
+    if (isSyncingFromCode) return;
+    syncVisualToCode();
+  });
+  observer.observe(visualEl, {
+    childList: true,
+    subtree: true,
+    characterData: true,
+    attributes: true,
+  });
 
   // ---------- Toolbar commands ----------
   function exec(cmd, value = null) {
     visualEl.focus();
-    document.execCommand(cmd, false, value);
-    onVisualInput();
+    try {
+      document.execCommand(cmd, false, value);
+    } catch (e) {
+      console.warn("execCommand failed:", cmd, e);
+    }
+    // Force immediate sync after toolbar action
+    setTimeout(() => syncVisualToCode(true), 10);
   }
 
   document.querySelectorAll(".tool-btn[data-cmd]").forEach((btn) => {
@@ -127,6 +206,10 @@
   // Keyboard shortcuts
   document.addEventListener("keydown", (e) => {
     if (!(e.ctrlKey || e.metaKey)) return;
+    // Only intercept when focus is in the visual editor
+    if (document.activeElement !== visualEl && !visualEl.contains(document.activeElement)) {
+      return;
+    }
     const key = e.key.toLowerCase();
     if (key === "b") {
       e.preventDefault();
@@ -211,15 +294,20 @@
       }[layoutMode]
     );
 
-    // Refresh CodeMirror size
     setTimeout(() => codeEditor && codeEditor.refresh(), 50);
   });
 
   // ---------- Clear ----------
   document.getElementById("btn-clear").addEventListener("click", () => {
     if (!confirm("Effacer tout le contenu ?")) return;
+    isSyncingFromVisual = true;
+    isSyncingFromCode = true;
     visualEl.innerHTML = "";
     codeEditor.setValue("");
+    setTimeout(() => {
+      isSyncingFromVisual = false;
+      isSyncingFromCode = false;
+    }, 50);
     updateStats();
     setStatus("Contenu effacé");
   });
@@ -256,13 +344,14 @@ ${codeEditor.getValue()}
   document.getElementById("btn-format").addEventListener("click", () => {
     try {
       let html = codeEditor.getValue();
-      // Very light formatting
       html = html
         .replace(/>\s*</g, ">\n<")
         .replace(/(<\/?(?:div|p|h[1-6]|ul|ol|li|blockquote|table|tr|thead|tbody|section|article|header|footer|nav)[^>]*>)/gi, "\n$1\n")
         .replace(/\n{3,}/g, "\n\n")
         .trim();
+      isSyncingFromVisual = true;
       codeEditor.setValue(html);
+      setTimeout(() => { isSyncingFromVisual = false; }, 50);
       setStatus("Code formaté");
     } catch (err) {
       setStatus("Erreur de formatage");
@@ -297,25 +386,12 @@ ${codeEditor.getValue()}
     }
   });
 
-  // ---------- Stats ----------
-  function updateStats() {
-    const text = visualEl.innerText || "";
-    const words = text.trim() ? text.trim().split(/\s+/).length : 0;
-    wordCountEl.textContent = `${words} mot${words > 1 ? "s" : ""}`;
-  }
-
-  function setStatus(msg) {
-    statusEl.textContent = msg;
-    clearTimeout(setStatus._t);
-    setStatus._t = setTimeout(() => {
-      statusEl.textContent = "Prêt";
-    }, 2500);
-  }
-
   // ---------- Persist content (localStorage) ----------
   function saveContent() {
     try {
-      localStorage.setItem("split-wysiwyg-content", codeEditor.getValue());
+      if (codeEditor) {
+        localStorage.setItem("split-wysiwyg-content", codeEditor.getValue());
+      }
     } catch (_) {}
   }
 
@@ -331,7 +407,6 @@ ${codeEditor.getValue()}
     return false;
   }
 
-  // Auto-save every 2s when dirty
   let saveTimer = null;
   function scheduleSave() {
     clearTimeout(saveTimer);
@@ -367,7 +442,9 @@ ${codeEditor.getValue()}
   });
 
   // Initial refresh after layout
-  setTimeout(() => codeEditor.refresh(), 100);
+  setTimeout(() => {
+    if (codeEditor) codeEditor.refresh();
+  }, 100);
 
-  console.log("Split WYSIWYG Editor ready");
+  console.log("Split WYSIWYG Editor ready – sync improved");
 })();
