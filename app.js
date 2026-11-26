@@ -92,7 +92,6 @@
       lineNumbers: true,
       lineWrapping: true,
       autoCloseTags: true,
-      matchTags: { bothTags: true },
       extraKeys: { "Ctrl-Space": "autocomplete", "Cmd-Space": "autocomplete" },
       indentUnit: 2,
       tabSize: 2,
